@@ -1,0 +1,12 @@
+# Build artifacts
+*.o
+*.i
+*.s
+*.elf
+*.gba
+*.map
+
+# Common OS/editor junk
+.DS_Store
+Thumbs.db
+.vscode/
