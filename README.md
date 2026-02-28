@@ -9,7 +9,7 @@ This version upgrades the original Mode 3 game to Mode 4 with:
 * Custom designed Start, Pause, Win, and Lose screens
 * Improved flicker handling
 
-## Game Overview
+# Game Overview
 
 You pilot a ship in deep space, blasting incoming asteroids to survive and score points. Avoid collisions, manage your lives, and use special abilities strategically to win.
 
@@ -44,7 +44,7 @@ The game is driven by a full state machine:
 * Custom lose screen
 * Press **START** to return to START
 
-## Controls
+# Controls
 
 ## Normal Gameplay
 
@@ -61,16 +61,6 @@ The game is driven by a full state machine:
 * `B:` Nova Bomb available (0 or 1)
 
 HUD redraws dynamically and is rendered last to prevent flicker artifacts.
-
-## Win / Lose Conditions
-
-### Win
-
-* Reach **25 points**
-
-### Lose
-
-* Run out of lives (start with 3)
 
 ## Above-and-Beyond Mechanic: Nova Bomb Power-Up
 
@@ -90,7 +80,7 @@ A rare **magenta bomb asteroid** spawns roughly **1 in every ~15 asteroids**.
 
 This mechanic adds strategic depth without altering the core gameplay loop.
 
-# 🧪 Debug / Cheat Controls
+# Debug / Cheat Controls
 
 Hold these combinations during gameplay to unlock cheats:
 
@@ -101,7 +91,7 @@ Hold these combinations during gameplay to unlock cheats:
 * **SELECT + B** → Clear all asteroids
 * **SELECT + RIGHT** → Grant Nova Bomb (`B:1`)
 
-## Technical Implementation Highlights
+# Technical Implementation Highlights
 
 ## Mode 4 Rendering
 
@@ -153,7 +143,6 @@ Hold these combinations during gameplay to unlock cheats:
 ## Build & Run
 
 Compile using the provided GBA toolchain and run in:
-
 * mGBA
 * VisualBoyAdvance
 * Docker-based GBA compiler
