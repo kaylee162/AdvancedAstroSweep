@@ -17,16 +17,21 @@
 #undef CI_MAGENTA
 #undef CI_BROWN
 
-#define CI_BLACK   0   // startPal[0]  = 0x0000
-#define CI_WHITE   11  // startPal[11] = 0x7FFF
-#define CI_GRAY    1   
-#define CI_YELLOW  2   
-#define CI_RED     3   
-#define CI_GREEN   12  
-#define CI_CYAN    6   
-#define CI_MAGENTA 4   
-#define CI_BROWN   7   
+#define CI_BLACK    0   // startPal[0]  = 0x0000
+#define CI_WHITE    48  // startPal[48] = 0x7FFF  (TRUE white)
+#define CI_GRAY     36  // startPal[36] = 0x4631
+#define CI_YELLOW   50  // startPal[50] = 0x171D  (yellow-ish)
+#define CI_RED      18  // startPal[18] = 0x20BE  (red-ish)
+#define CI_GREEN    68  // startPal[68] = 0x260E  (green-ish)
+#define CI_CYAN     25  // startPal[25] = 0x5604  (cyan/teal)
+#define CI_MAGENTA  18  // startPal[18] = 0x20BE  (closest available)
+#define CI_BROWN    72  // startPal[72] = 0x2E71
 
+
+#define PAUSE_CI_BLACK   0   // 0x0000
+#define PAUSE_CI_WHITE   47  // 0x7FFF
+#define PAUSE_CI_GRAY    48  // 0x39CE (nice gray)
+#define PAUSE_CI_YELLOW  52  // 0x171D (yellow-ish)
 
 // Game tuning
 #define MAX_BULLETS   16   // object pool
@@ -42,7 +47,8 @@ typedef enum {
     STATE_GAME,
     STATE_PAUSE,
     STATE_WIN,
-    STATE_LOSE
+    STATE_LOSE,
+    STATE_SCOREBOARD
 } GameState;
 
 // Player struct
@@ -101,6 +107,8 @@ void goToGame(void);
 void goToPause(void);
 void goToWin(void);
 void goToLose(void);
+void goToScoreboardFromStart(void);
+void goToScoreboardFromPause(void);
 
 // State getter (so main can switch)
 GameState getState(void);

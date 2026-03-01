@@ -2,6 +2,10 @@
 #include "mode4.h"
 #include "game.h"
 #include "start.h"
+#include "pause.h"
+//#include "rocket.h"
+//#include "powered_rocket.h"
+
 
 // Buttons
 u16 buttons;
@@ -9,7 +13,6 @@ u16 oldButtons;
 
 static void initialize(void);
 
-// Main
 int main(void) {
     // Initialize and Initialize Game
     initialize();
@@ -18,10 +21,6 @@ int main(void) {
     while (1) {
         oldButtons = buttons;
         buttons = REG_BUTTONS;
-
-    // Load the fullscreen start image palette (256 colors), then overwrite
-    // the first few entries with known UI/game colors.
-    DMANow(3, startPal, PALETTE, 256);
 
         // Game logic update stays the same
         updateGame();
