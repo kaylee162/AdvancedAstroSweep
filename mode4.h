@@ -21,7 +21,7 @@ void fillScreen4(u8 colorIndex);
 
 // Images (8bpp, packed 2 pixels per u16)
 void drawImage4(int x, int y, int width, int height, const u16 *image);
-void drawFullscreenImage4(const u16 *image);
+void drawFullScreenImage4(const u16 *image);
 
 // Draw a sub-rectangle from a larger 8bpp image (same packed format).
 // Useful when you only have a fullscreen image but need a "sprite" too.

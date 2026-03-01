@@ -2,6 +2,10 @@
 #include "mode4.h"
 #include "sfx.h"
 #include "start.h"
+#include "pause.h"
+#include <stdio.h>
+//#include "rocket.h"
+//#include "powered_rocket.h"
 
 // Module-level game state
 static GameState state;
@@ -10,7 +14,7 @@ static Player player;
 
 static Bullet bullets[MAX_BULLETS];       // object pool
 static Asteroid asteroids[MAX_ASTEROIDS]; // object pool
-static Star stars[MAX_STARS];             // just for background motion (array + extra polish)
+static Star stars[MAX_STARS];             // background motion (array + polish)
 
 // Game counters
 static int score;
@@ -18,8 +22,6 @@ static int targetScore;
 static int frameCount;
 static int spawnTimer;
 static int asteroidSpawnCount; // counts asteroid spawns for rare bomb-asteroid logic
-
-// Controls a small “slow motion” feel during bomb use (extra polish)
 static int screenShakeTimer;
 
 // Forward declarations
@@ -52,25 +54,46 @@ static int cheatFlashTimer = 0; // quick visual confirmation
 // Prevents re-drawing heavy text screens every frame (reduces flicker).
 static GameState lastRenderedState = -1;
 
-// In Mode 4 with page flipping, the back buffer alternates every frame.
-// If we "draw once then return", the other buffer will show stale pixels -> flicker.
-// Track which buffer we last rendered into so we can redraw on buffer changes.
-static int fullRedrawRequested = 1;   // full redraw once when entering gameplay
-static int hudDirty = 1;              // force HUD redraw when needed
+// Mode 4 page-flip bookkeeping
+static int fullRedrawRequested = 1;
+static int hudDirty = 1;
+
+// High score (persists across restarts within the same run)
+static int highScore = 0;
+
+// Scoreboard behavior
+static GameState scoreboardReturnState = STATE_START; // where to return when leaving scoreboard
+static int scoreboardShowCurrentScore = 0;            // only show current score when opened from PAUSE
+
+// videoBuffer should already exist in mode4.c/mode4.h
+extern u16* videoBuffer;
+
+static void renderStaticToBothBuffers(void (*drawFn)(void)) {
+    u16* saved = videoBuffer;
+
+    // Draw into page 0
+    videoBuffer = FRONTBUFFER;
+    drawFn();
+
+    // Draw into page 1
+    videoBuffer = BACKBUFFER;
+    drawFn();
+
+    // Restore whatever back buffer the engine thinks we’re on
+    videoBuffer = saved;
+}
 
 static int clamp(int v, int lo, int hi) {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
 }
-// Small helper for debugging
+
 static void cheatFlash(void) {
     cheatFlashTimer = 10; // 10 frames
 }
 
-// Clear queue: update logic NEVER draws.
-// When something deactivates (bullet/asteroid), we queue the old rect to clear
-// and then flush clears during drawGame() (which happens after waitForVBlank()).
+// Clear queue (kept as-is: update never draws)
 #define MAX_CLEARS 64
 
 typedef struct {
@@ -86,12 +109,10 @@ static void queueClear(int x, int y, int w, int h) {
     if (clearCount < MAX_CLEARS) {
         clearQueue[clearCount++] = (ClearRect){ x, y, w, h };
     } else {
-        // Too many clears this frame; safest is to request a full redraw next frame.
         fullRedrawRequested = 1;
         clearCount = 0;
     }
 }
-
 
 // Safe pixel for Mode 4: clips to screen and keeps pixels out of the HUD strip.
 static inline void safeSetPixel4(int x, int y, u8 colorIndex) {
@@ -100,15 +121,10 @@ static inline void safeSetPixel4(int x, int y, u8 colorIndex) {
     setPixel4(x, y, colorIndex);
 }
 
-// Forward decl because it uses drawRectPlayfield(...)
-static void flushClears(void);
-
 // Draw a rectangle clipped to the gameplay area (below HUD) and screen bounds.
-// This prevents erasing HUD pixels while also avoiding off-screen "crumbs".
 static void drawRectPlayfield(int x, int y, int w, int h, u8 colorIndex) {
     if (w <= 0 || h <= 0) return;
 
-    // Clip against HUD strip first (keep everything below HUD_HEIGHT)
     if (y < HUD_HEIGHT) {
         int cut = HUD_HEIGHT - y;
         y = HUD_HEIGHT;
@@ -123,96 +139,191 @@ static void fillPlayfield(u8 colorIndex) {
     drawRect4(0, HUD_HEIGHT, SCREENWIDTH, SCREENHEIGHT - HUD_HEIGHT, colorIndex);
 }
 
-
-#define MAX_CLEAR_PER_FRAME 16
-
-static void flushClears(void) {
-    // If we have too many small clears, doing them all can exceed VBlank time.
-    // Instead, request a full redraw next frame (usually smoother).
-    if (clearCount > MAX_CLEAR_PER_FRAME) {
-        fullRedrawRequested = 1;
-        clearCount = 0;
-        return;
-    }
-
-    for (int i = 0; i < clearCount; i++) {
-        drawRectPlayfield(clearQueue[i].x, clearQueue[i].y,
-                          clearQueue[i].w, clearQueue[i].h, CI_BLACK);
-    }
-    clearCount = 0;
-}
-
-// NOTE: main() flips every frame, so we do NOT flip here.
-// We just draw into the current back buffer.
-// Calling this every frame prevents stale-buffer flicker.
-static inline void renderStaticToBothBuffers(void (*drawFn)(void)) {
-    drawFn();
-}
+/* =========================
+   Static Screen Draw Helpers
+   ========================= */
 
 static void drawStartScreenStatic(void) {
-    fillScreen4(0);                 // use correct index below (see palette section)
-    drawFullscreenImage4(startBitmap);
+    fillScreen4(0);
+    drawFullScreenImage4(startBitmap);
+    
+
+    drawString4(80, 100, "Earn 25 points", CI_YELLOW);
+    drawString4(100, 110, "A: Shoot", CI_YELLOW);
+    drawString4(100, 120, "B: Dash", CI_YELLOW);
+    drawString4(100, 130, "L: Bomb", CI_YELLOW);
+
+    // Optional hint text (keeps your existing start art, just overlays text)
+    drawString4(60, 145, "DOWN KEY: scoreboard", CI_YELLOW);
 }
 
 static void drawPauseScreenStatic(void) {
-    // If you want the frozen game behind pause, call drawGameFrame() here instead
-    // but simplest: just draw a pause overlay screen.
-    drawRect4(0, 0, SCREENWIDTH, SCREENHEIGHT, 0);
-    drawString4(96, 70, "PAUSED", 11);
-    drawString4(26, 92, "START: Resume  SELECT: Menu", 11);
+    // Load pause palette so pauseBitmap indices render correctly
+    DMANow(3, pausePal, PALETTE, 256);
+
+    fillScreen4(0); // use index 0 of pausePal (usually black)
+    drawFullScreenImage4(pauseBitmap);
+
+    drawString4(70, 100, "Feeling Stressed?", PAUSE_CI_YELLOW);
+    drawString4(50, 110, "It's ok to take a break :)", PAUSE_CI_YELLOW);
+
+    drawString4(60, 145, "DOWN KEY: scoreboard", PAUSE_CI_YELLOW);
 }
 
 static void drawWinScreenStatic(void) {
     fillScreen4(CI_BLACK);
-    drawString4(100, 70, "YOU WIN!", CI_WHITE);
-    drawString4(60, 90, "Press START for menu", CI_WHITE);
+    drawString4(100, 70, "YOU WIN!", CI_YELLOW);
+    drawString4(60, 90, "Press START for menu", CI_YELLOW);
 }
 
 static void drawLoseScreenStatic(void) {
     fillScreen4(CI_BLACK);
-    drawString4(100, 70, "YOU LOSE!", CI_WHITE);
-    drawString4(60, 90, "Press START for menu", CI_WHITE);
+    drawString4(100, 70, "YOU LOSE!", CI_YELLOW);
+    drawString4(60, 90, "Press START for menu", CI_YELLOW);
 }
 
-// Public API
+static void drawScoreboardStatic(void) {
+    fillScreen4(CI_BLACK);
+
+    drawString4(20, 20, "SCOREBOARD", CI_YELLOW);
+
+    char buf[32];
+
+    sprintf(buf, "HIGH: %d", highScore);
+    drawString4(20, 60, buf, CI_YELLOW);
+
+    if (scoreboardShowCurrentScore) {
+        sprintf(buf, "CURRENT: %d", score);
+        drawString4(20, 80, buf, CI_YELLOW);
+    }
+
+    drawString4(20, 100, "DOWN KEY: go back", CI_YELLOW);
+}
+
+/* ==========
+   Public API
+   ========== */
+
 GameState getState(void) {
     return state;
 }
 
 void initGame(void) {
-    // Baseline setup
     sfxInit();
     targetScore = 25;
 
+    // IMPORTANT: do NOT reset highScore here; it must persist between restarts.
     goToStart();
 }
 
-// Update Game function
-void updateGame(void) {
-    // Start / Pausing
-    switch (state) {
+/* =================
+   State Transitions
+   ================= */
 
-        
+void goToStart(void) {
+    state = STATE_START;
+
+    // Palette (keep as you had it)
+    DMANow(3, startPal, PALETTE, 256);
+
+    // Force redraw
+    lastRenderedState = -1;
+}
+
+void goToGame(void) {
+    // If coming from START/WIN/LOSE, fully reset gameplay (but not highScore).
+    DMANow(3, startPal, PALETTE, 256);
+    if (state == STATE_START || state == STATE_WIN || state == STATE_LOSE) {
+        score = 0;
+        frameCount = 0;
+        spawnTimer = 45;
+        asteroidSpawnCount = 0;
+        screenShakeTimer = 0;
+
+        initStars();
+        initPlayer();
+        initPools();
+
+        fullRedrawRequested = 1;
+        hudDirty = 1;
+    }
+
+    // If resuming from PAUSE, remove the pause overlay with a one-time redraw
+    if (state == STATE_PAUSE) {
+        fullRedrawRequested = 1;
+        hudDirty = 1;
+    }
+
+    state = STATE_GAME;
+}
+
+void goToPause(void) {
+    state = STATE_PAUSE;
+    lastRenderedState = -1;
+    hudDirty = 1;
+
+    DMANow(3, pausePal, PALETTE, 256);
+}
+
+void goToWin(void) {
+    state = STATE_WIN;
+    lastRenderedState = -1;
+    sfxWin();
+
+    if (score > highScore) highScore = score;
+}
+
+void goToLose(void) {
+    state = STATE_LOSE;
+    lastRenderedState = -1;
+    sfxLose();
+
+    if (score > highScore) highScore = score;
+}
+
+void goToScoreboardFromStart(void) {
+    scoreboardReturnState = STATE_START;
+    scoreboardShowCurrentScore = 0;
+
+    state = STATE_SCOREBOARD;
+    DMANow(3, startPal, PALETTE, 256);
+    lastRenderedState = -1;
+}
+
+void goToScoreboardFromPause(void) {
+    scoreboardReturnState = STATE_PAUSE;
+    scoreboardShowCurrentScore = 1;
+
+    state = STATE_SCOREBOARD;
+    DMANow(3, startPal, PALETTE, 256);
+    lastRenderedState = -1;
+}
+
+/* ==========
+   Game Update
+   ========== */
+
+void updateGame(void) {
+    switch (state) {
         case STATE_START:
-            // START: begin game
+            // START begins game
             if (BUTTON_PRESSED(BUTTON_START)) {
                 goToGame();
+            }
+
+            // Scoreboard accessible ONLY from START (use SELECT)
+            if (BUTTON_PRESSED(BUTTON_DOWN)) {
+                goToScoreboardFromStart();
             }
             break;
 
         case STATE_GAME: {
             // Debug cheats (hold SELECT + a cheat key)
             if (BUTTON_HELD(BUTTON_SELECT)) {
-                // Convert to "pressed = 1" bitmask (since buttons are active-low)
                 u16 pressedNow = (~buttons);
-
-                // Use these keys for cheats 
-                u16 cheatKeys = (BUTTON_START | BUTTON_A | BUTTON_B | BUTTON_LEFT | BUTTON_RIGHT | BUTTON_UP);
-
-                // Current held cheat keys while SELECT is held
+                u16 cheatKeys = (BUTTON_START | BUTTON_A | BUTTON_B | BUTTON_LEFT | BUTTON_RIGHT | BUTTON_UP | BUTTON_DOWN);
                 u16 comboNow = pressedNow & cheatKeys;
 
-                // Newly pressed keys since last frame (one-shot)
                 u16 newlyPressed = (comboNow & (~cheatLatch));
                 cheatLatch = comboNow;
 
@@ -223,26 +334,28 @@ void updateGame(void) {
                     break;
                 }
 
-                // SELECT + L -> LOSE
+                // SELECT + LEFT -> LOSE
                 if (newlyPressed & BUTTON_LEFT) {
                     goToLose();
                     cheatLatch = 0;
                     break;
                 }
 
+                // (Removed: scoreboard access from GAME; scoreboard must be START/PAUSE only)
+
                 // SELECT + B -> clear asteroids
                 if (newlyPressed & BUTTON_B) {
                     for (int i = 0; i < MAX_ASTEROIDS; i++) {
                         if (asteroids[i].active) {
                             queueClear(asteroids[i].oldx, asteroids[i].oldy,
-                                    asteroids[i].size, asteroids[i].size);
+                                       asteroids[i].size, asteroids[i].size);
                             queueClear(asteroids[i].x, asteroids[i].y,
-                                    asteroids[i].size, asteroids[i].size);
+                                       asteroids[i].size, asteroids[i].size);
                             asteroids[i].active = 0;
                         }
                     }
                     cheatFlash();
-                    break; // stop frame so player input doesn't also run
+                    break;
                 }
 
                 // SELECT + A -> reset score + restore lives
@@ -253,19 +366,19 @@ void updateGame(void) {
                     player.bombs = 0;
                     hudDirty = 1;
                     cheatFlash();
-                    break; // stop frame so updatePlayer() doesn't shoot and mask the test
+                    break;
                 }
 
                 // SELECT + UP -> restore lives only
                 if (newlyPressed & BUTTON_UP) {
                     player.lives = 3;
-                    player.invulnTimer = 0;   
+                    player.invulnTimer = 0;
                     hudDirty = 1;
                     cheatFlash();
                     break;
                 }
 
-                // SELECT + R -> give bomb
+                // SELECT + RIGHT -> give bomb
                 if (newlyPressed & BUTTON_RIGHT) {
                     player.bombs = 1;
                     hudDirty = 1;
@@ -274,7 +387,6 @@ void updateGame(void) {
                 }
 
                 // If SELECT is held but no cheat fired, do nothing else this frame.
-                // (Prevents normal gameplay controls while debugging.)
                 break;
             } else {
                 cheatLatch = 0;
@@ -296,11 +408,9 @@ void updateGame(void) {
             spawnTimer--;
             if (spawnTimer <= 0) {
                 spawnAsteroid();
-                // Spawn rate ramps up slowly over time
                 spawnTimer = clamp(60 - (frameCount / 240), 18, 60);
             }
 
-            // Update asteroids and handle collisions
             updateAsteroids();
             handleCollisions();
 
@@ -315,32 +425,51 @@ void updateGame(void) {
             if (screenShakeTimer > 0) screenShakeTimer--;
             break;
         }
+
         case STATE_PAUSE:
-            // START: resume, SELECT: restart
+            // START: resume
             if (BUTTON_PRESSED(BUTTON_START)) {
                 goToGame();
-            } else if (BUTTON_PRESSED(BUTTON_SELECT)) {
+            }
+            // SELECT: menu
+            else if (BUTTON_PRESSED(BUTTON_SELECT)) {
                 goToStart();
+            }
+            // Scoreboard accessible ONLY from PAUSE (use L shoulder)
+            else if (BUTTON_PRESSED(BUTTON_DOWN)) {
+                goToScoreboardFromPause();
             }
             break;
 
         case STATE_WIN:
         case STATE_LOSE:
-            // START: back to start (or restart)
             if (BUTTON_PRESSED(BUTTON_START)) {
                 goToStart();
+            }
+            break;
+
+        case STATE_SCOREBOARD:
+            // Always return to where we came from
+            if (BUTTON_PRESSED(BUTTON_DOWN)) {
+                if (scoreboardReturnState == STATE_PAUSE) {
+                    goToPause();
+                } else {
+                    goToStart();
+                }
             }
             break;
     }
 }
 
-// Draw HUD in top-left. Call this LAST so it can't be overwritten.
+/* ==========
+   Game Draw
+   ========== */
+
 static void drawHUD(void) {
     int livesShown  = clamp(player.lives, 0, 9);
     int pointsShown = clamp(score, 0, 99);
     int bombsShown  = clamp(player.bombs, 0, 1);
 
-    // Clear HUD strip
     drawRect4(0, 0, SCREENWIDTH, HUD_HEIGHT, CI_BLACK);
 
     char hud[24];
@@ -356,122 +485,65 @@ static void drawHUD(void) {
 }
 
 void drawGame(void) {
-    // START: redraw every frame (cheap) so both buffers stay in sync
-    if (state == STATE_START) {
+    // 1) START / WIN / LOSE: draw once per state change, but to BOTH buffers
+    if (state == STATE_START || state == STATE_WIN || state == STATE_LOSE) {
+        if (state == lastRenderedState) return;
         lastRenderedState = state;
-        renderStaticToBothBuffers(drawStartScreenStatic); // NOTE: this now just calls drawFn()
+
+        if (state == STATE_START) {
+            renderStaticToBothBuffers(drawStartScreenStatic);
+        } else if (state == STATE_WIN) {
+            renderStaticToBothBuffers(drawWinScreenStatic);
+        } else {
+            renderStaticToBothBuffers(drawLoseScreenStatic);
+        }
         return;
     }
 
-    // WIN: redraw every frame
-    if (state == STATE_WIN) {
-        lastRenderedState = state;
-        renderStaticToBothBuffers(drawWinScreenStatic);
-        return;
-    }
-
-    // LOSE: redraw every frame
-    if (state == STATE_LOSE) {
-        lastRenderedState = state;
-        renderStaticToBothBuffers(drawLoseScreenStatic);
-        return;
-    }
-
-    // PAUSE: redraw every frame
+    // 2) PAUSE: draw once on entry, but to BOTH buffers
     if (state == STATE_PAUSE) {
+        if (state == lastRenderedState) return;
         lastRenderedState = state;
+
         renderStaticToBothBuffers(drawPauseScreenStatic);
         return;
     }
 
-    // GAME: full redraw every frame for Mode 4 page-flip stability
-    if (state != lastRenderedState) {
+    // 3) SCOREBOARD: draw once on entry, but to BOTH buffers
+    if (state == STATE_SCOREBOARD) {
+        if (state == lastRenderedState) return;
         lastRenderedState = state;
-        // Not strictly needed anymore, but harmless to keep for logic that expects it
-        fullRedrawRequested = 1;
-        hudDirty = 1;
+
+        renderStaticToBothBuffers(drawScoreboardStatic);
+        return;
     }
 
-    // Full clear of playfield (below HUD)
+    // 4) GAME: normal rendering (HUD always last)
+    if (state != lastRenderedState) {
+        lastRenderedState = state;
+        fullRedrawRequested = 1;
+        hudDirty = 1;
+        clearCount = 0;
+    }
+
+    // Full redraw path (your current approach)
     fillPlayfield(CI_BLACK);
 
-    // Draw everything for this frame
     drawStars();
     drawPlayer();
     drawBullets();
     drawAsteroids();
 
-    // HUD last (top strip)
     drawHUD();
 
-    // We are not using clearQueue when full-redrawing
-    clearCount = 0;
     fullRedrawRequested = 0;
+    clearCount = 0;
 }
 
-// State transitions
-//void goToStart(void) {
-    //state = STATE_START;
-//}
+/* ==========
+   Stars
+   ========== */
 
-void goToStart(void) {
-    state = STATE_START;
-
-    // Load ONLY 16 entries (your startPal is [16])
-    DMANow(3, startPal, PALETTE, 16);
-
-    // Force start screen to redraw (and to BOTH buffers, see helper below)
-    lastRenderedState = -1;
-}
-
-// Go To Game
-void goToGame(void) {
-    // If coming from START/WIN/LOSE, fully reset.
-    if (state == STATE_START || state == STATE_WIN || state == STATE_LOSE) {
-        score = 0;
-        frameCount = 0;
-        spawnTimer = 45;
-        asteroidSpawnCount = 0;
-        screenShakeTimer = 0;
-
-        initStars();
-        initPlayer();
-        initPools();
-
-        // Force a clean full redraw on first gameplay frame
-        fullRedrawRequested = 1;
-        hudDirty = 1;
-    }
-
-    // If resuming from PAUSE, remove the pause overlay with a one-time redraw
-    if (state == STATE_PAUSE) {
-        fullRedrawRequested = 1;
-        hudDirty = 1;
-    }
-
-    state = STATE_GAME;
-}
-
-// Go To Pause
-void goToPause(void) {
-    state = STATE_PAUSE;
-    hudDirty = 1;
-}
-
-// Go to Win
-void goToWin(void) {
-    state = STATE_WIN;
-    sfxWin();
-}
-
-// Go to Lose
-void goToLose(void) {
-    state = STATE_LOSE;
-    sfxLose();
-}
-
-// Stars (background polish)
-// Initialize the starts
 static void initStars(void) {
     for (int i = 0; i < MAX_STARS; i++) {
         stars[i].x = (i * 13) % SCREENWIDTH;
@@ -482,25 +554,21 @@ static void initStars(void) {
     }
 }
 
-// Update the stars 
 static void updateStars(void) {
     for (int i = 0; i < MAX_STARS; i++) {
         stars[i].oldx = stars[i].x;
         stars[i].oldy = stars[i].y;
 
-        // Drift downward
         stars[i].y += stars[i].speed;
 
-        // If star moves off bottom, respawn BELOW HUD strip
         if (stars[i].y >= SCREENHEIGHT) {
-            stars[i].y = HUD_HEIGHT;   // never 0 anymore
+            stars[i].y = HUD_HEIGHT;
             stars[i].x = (stars[i].x + 53) % SCREENWIDTH;
         }
     }
 }
 
-// Draw stars function
-    static void drawStars(void) {
+static void drawStars(void) {
     for (int i = 0; i < MAX_STARS; i++) {
         if (stars[i].y >= HUD_HEIGHT && stars[i].y < SCREENHEIGHT) {
             setPixel4(stars[i].x, stars[i].y, CI_GRAY);
@@ -508,9 +576,10 @@ static void updateStars(void) {
     }
 }
 
+/* ==========
+   Player
+   ========== */
 
-// Player
-// Initialize the player
 static void initPlayer(void) {
     player.w = PLAYER_W;
     player.h = PLAYER_H;
@@ -528,7 +597,6 @@ static void initPlayer(void) {
     player.bombs = 0;
 }
 
-// Update player
 static void updatePlayer(void) {
     player.oldx = player.x;
     player.oldy = player.y;
@@ -538,26 +606,21 @@ static void updatePlayer(void) {
 
     int spd = player.speed;
 
-    // Movement (D-pad)
     if (BUTTON_HELD(BUTTON_LEFT))  player.x -= spd;
     if (BUTTON_HELD(BUTTON_RIGHT)) player.x += spd;
     if (BUTTON_HELD(BUTTON_UP))    player.y -= spd;
     if (BUTTON_HELD(BUTTON_DOWN))  player.y += spd;
 
-    // Clamp to screen (keep player out of HUD strip)
     player.x = clamp(player.x, 0, SCREENWIDTH - player.w);
     player.y = clamp(player.y, HUD_HEIGHT, SCREENHEIGHT - player.h);
 
-    // Shoot (A)
     if (BUTTON_PRESSED(BUTTON_A)) {
         fireBullet();
     }
 
-    // Dash (B): quick burst movement, cooldown so it’s not spammable
     if (BUTTON_PRESSED(BUTTON_B) && player.dashCooldown == 0) {
         player.dashCooldown = 30;
 
-        // Dash in the direction held, default upward if nothing held
         int dx = 0, dy = -1;
         if (BUTTON_HELD(BUTTON_LEFT))  dx = -1, dy = 0;
         if (BUTTON_HELD(BUTTON_RIGHT)) dx =  1, dy = 0;
@@ -568,33 +631,25 @@ static void updatePlayer(void) {
         player.y = clamp(player.y + dy * 18, HUD_HEIGHT, SCREENHEIGHT - player.h);
     }
 
-    // Extra mechanic: Nova Bomb (L shoulder) clears asteroids and gives small score.
     if (BUTTON_PRESSED(BUTTON_LSHOULDER)) {
         useBomb();
     }
 }
 
-// Draw player function
 static void drawPlayer(void) {
-    // Erase old player rectangle
-    // drawRect4(player.oldx, player.oldy, player.w, player.h, CI_BLACK);
-
-    // Blink if invulnerable (visual feedback)
     if (player.invulnTimer > 0 && (player.invulnTimer / 4) % 2 == 0) {
-        // don't draw (blink)
         return;
     }
 
-    // Draw new player rectangle
     drawRect4(player.x, player.y, player.w, player.h, CI_CYAN);
-
-    // Tiny “cockpit” pixel to make it look like more than a box
     safeSetPixel4(player.x + 3, player.y + 2, CI_WHITE);
 }
 
-// Initialize object pools
+/* ==========
+   Pools
+   ========== */
+
 static void initPools(void) {
-    // Bullet pool
     for (int i = 0; i < MAX_BULLETS; i++) {
         bullets[i].active = 0;
         bullets[i].w = 2;
@@ -605,7 +660,6 @@ static void initPools(void) {
         bullets[i].dy = -4;
     }
 
-    // Asteroid pool
     for (int i = 0; i < MAX_ASTEROIDS; i++) {
         asteroids[i].active = 0;
         asteroids[i].size = 8;
@@ -619,7 +673,6 @@ static void initPools(void) {
 }
 
 static void fireBullet(void) {
-    // Find first inactive bullet in pool
     for (int i = 0; i < MAX_BULLETS; i++) {
         if (!bullets[i].active) {
             bullets[i].active = 1;
@@ -633,10 +686,8 @@ static void fireBullet(void) {
             return;
         }
     }
-    // If pool is full, do nothing (meaningful pooling)
 }
 
-// Update bullet function
 static void updateBullets(void) {
     for (int i = 0; i < MAX_BULLETS; i++) {
         if (!bullets[i].active) continue;
@@ -646,24 +697,19 @@ static void updateBullets(void) {
 
         bullets[i].y += bullets[i].dy;
 
-        // Reached HUD strip -> deactivate (prevents HUD damage)
         if (bullets[i].y < HUD_HEIGHT) {
             bullets[i].active = 0;
-            // erase bullet so it doesn't leave a trail (only if in playfield)
             queueClear(bullets[i].oldx, bullets[i].oldy, bullets[i].w, bullets[i].h);
             continue;
         }
 
-        // Offscreen -> deactivate (returns to pool)
         if (bullets[i].y < 0) {
             bullets[i].active = 0;
-            // erase bullet so it doesn't leave a trail (only if in playfield)
             queueClear(bullets[i].oldx, bullets[i].oldy, bullets[i].w, bullets[i].h);
         }
     }
 }
 
-// Draw bullet function
 static void drawBullets(void) {
     for (int i = 0; i < MAX_BULLETS; i++) {
         if (!bullets[i].active) continue;
@@ -671,76 +717,64 @@ static void drawBullets(void) {
     }
 }
 
-// Asteroids (object pool)
+/* ==========
+   Asteroids
+   ========== */
+
 static void spawnAsteroid(void) {
     for (int i = 0; i < MAX_ASTEROIDS; i++) {
         if (!asteroids[i].active) {
             asteroids[i].active = 1;
 
-            // Count spawns so we can make a rare "bomb asteroid".
             asteroidSpawnCount++;
-
-            // Roughly 1 in 15 spawns is a bomb-asteroid (power-up).
-            // (Deterministic on purpose: avoids needing rand() setup.)
             asteroids[i].isBomb = (asteroidSpawnCount % 15 == 0);
 
-            // Spawn across the top
             if (asteroids[i].isBomb) {
-                // Bomb asteroid: smaller + distinct look, always 1 HP
                 asteroids[i].size = 8;
                 asteroids[i].hp = 1;
             } else {
-                asteroids[i].size = 6 + ((frameCount / 180) % 7); // size grows slowly over time
+                asteroids[i].size = 6 + ((frameCount / 180) % 7);
                 asteroids[i].hp = (asteroids[i].size >= 10) ? 2 : 1;
             }
 
             asteroids[i].x = (i * 29 + frameCount * 3) % (SCREENWIDTH - asteroids[i].size);
-            asteroids[i].y = HUD_HEIGHT - asteroids[i].size; // never spawn through HUD
+            asteroids[i].y = HUD_HEIGHT - asteroids[i].size;
 
             asteroids[i].oldx = asteroids[i].x;
             asteroids[i].oldy = asteroids[i].y;
 
-            // Slight horizontal drift
-            asteroids[i].dx = ((i % 3) - 1);  // -1,0,1
-            asteroids[i].dy = 1 + (frameCount / 600); // speeds up a bit later
+            asteroids[i].dx = ((i % 3) - 1);
+            asteroids[i].dy = 1 + (frameCount / 600);
             asteroids[i].dy = clamp(asteroids[i].dy, 1, 3);
 
             return;
         }
     }
-    // Pool full: no spawn (again, intentional)
 }
 
-// Update asteroids function
 static void updateAsteroids(void) {
     for (int i = 0; i < MAX_ASTEROIDS; i++) {
         if (!asteroids[i].active) continue;
 
-        // Save last drawn location for clean erasing
         asteroids[i].oldx = asteroids[i].x;
         asteroids[i].oldy = asteroids[i].y;
 
-        // Movement
         asteroids[i].x += asteroids[i].dx;
         asteroids[i].y += asteroids[i].dy;
 
-        // Bounce slightly on side walls
         if (asteroids[i].x <= 0 || asteroids[i].x >= SCREENWIDTH - asteroids[i].size) {
             asteroids[i].dx = -asteroids[i].dx;
             asteroids[i].x = clamp(asteroids[i].x, 0, SCREENWIDTH - asteroids[i].size);
         }
 
-        // If it moved fully past the bottom, erase the LAST drawn rect and recycle
         if (asteroids[i].oldy < SCREENHEIGHT && asteroids[i].y >= SCREENHEIGHT) {
-            // Clear where it was last frame (this is the one that matters)
             queueClear(asteroids[i].oldx, asteroids[i].oldy,
-                    asteroids[i].size, asteroids[i].size);
+                       asteroids[i].size, asteroids[i].size);
             asteroids[i].active = 0;
         }
     }
 }
 
-// Draw asteroids function
 static void drawAsteroids(void) {
     for (int i = 0; i < MAX_ASTEROIDS; i++) {
         if (!asteroids[i].active) continue;
@@ -750,9 +784,11 @@ static void drawAsteroids(void) {
     }
 }
 
-// Collisions and bomb
+/* ===================
+   Collisions + Bomb
+   =================== */
+
 static void handleCollisions(void) {
-    // Bullet vs Asteroid
     for (int b = 0; b < MAX_BULLETS; b++) {
         if (!bullets[b].active) continue;
 
@@ -762,42 +798,34 @@ static void handleCollisions(void) {
             if (collision(bullets[b].x, bullets[b].y, bullets[b].w, bullets[b].h,
                           asteroids[a].x, asteroids[a].y, asteroids[a].size, asteroids[a].size)) {
 
-                // Bullet returns to pool
                 bullets[b].active = 0;
                 queueClear(bullets[b].oldx, bullets[b].oldy, bullets[b].w, bullets[b].h);
 
-                // Asteroid takes damage
                 asteroids[a].hp--;
                 if (asteroids[a].hp <= 0) {
-
-                    // Clear BOTH old and current positions (only in playfield)
                     queueClear(asteroids[a].oldx, asteroids[a].oldy,
-                                      asteroids[a].size, asteroids[a].size);
-
+                               asteroids[a].size, asteroids[a].size);
                     queueClear(asteroids[a].x, asteroids[a].y,
-                                      asteroids[a].size, asteroids[a].size);
+                               asteroids[a].size, asteroids[a].size);
 
                     asteroids[a].active = 0;
 
-                    // Bomb asteroid grants a one-time Nova Bomb (L) instead of just points.
                     if (asteroids[a].isBomb) {
-                        player.bombs = 1;   // only 0/1 allowed (keeps it balanced)
-                        playSfxPreset(SFXP_POWERUP); 
+                        player.bombs = 1;
+                        playSfxPreset(SFXP_POWERUP);
                     } else {
                         score++;
                         sfxHit();
                     }
 
-                    // Score/bomb changed -> redraw HUD
                     hudDirty = 1;
                 }
 
-                break; // bullet is gone; stop checking this bullet
+                break;
             }
         }
     }
 
-    // Player vs Asteroid
     if (player.invulnTimer == 0) {
         for (int a = 0; a < MAX_ASTEROIDS; a++) {
             if (!asteroids[a].active) continue;
@@ -805,19 +833,14 @@ static void handleCollisions(void) {
             if (collision(player.x, player.y, player.w, player.h,
                           asteroids[a].x, asteroids[a].y, asteroids[a].size, asteroids[a].size)) {
 
-                // Lose a life
                 player.lives--;
                 player.invulnTimer = 45;
-
-                // Ensure HUD redraws (lives changed)
                 hudDirty = 1;
 
-                // Remove asteroid on hit (queue clears; do NOT draw in update)
                 queueClear(asteroids[a].oldx, asteroids[a].oldy,
-                        asteroids[a].size, asteroids[a].size);
-
+                           asteroids[a].size, asteroids[a].size);
                 queueClear(asteroids[a].x, asteroids[a].y,
-                        asteroids[a].size, asteroids[a].size);
+                           asteroids[a].size, asteroids[a].size);
 
                 asteroids[a].active = 0;
                 sfxHit();
@@ -827,35 +850,23 @@ static void handleCollisions(void) {
     }
 }
 
-/**
- * Extra mechanic: Nova Bomb (L).
- * Earned by shooting a rare CI_MAGENTA "bomb asteroid".
- * Clears all asteroids currently active.
- * This is "above and beyond" because the core game works without it,
- * but it adds a strategic resource + panic button.
- */
 static void useBomb(void) {
     if (player.bombs <= 0) return;
     player.bombs--;
 
-    // Clear all asteroids and award a small bonus for using it well
     int cleared = 0;
     for (int i = 0; i < MAX_ASTEROIDS; i++) {
         if (asteroids[i].active) {
-            // Queue clears; don't draw in update
             queueClear(asteroids[i].oldx, asteroids[i].oldy,
-                    asteroids[i].size, asteroids[i].size);
+                       asteroids[i].size, asteroids[i].size);
             queueClear(asteroids[i].x, asteroids[i].y,
-                    asteroids[i].size, asteroids[i].size);
+                       asteroids[i].size, asteroids[i].size);
             asteroids[i].active = 0;
             cleared++;
         }
     }
 
-    // Reward for smart use, but not too strong
     score += (cleared >= 3) ? 2 : 1;
-
-    // Score changed, force HUD redraw
     hudDirty = 1;
 
     screenShakeTimer = 10;

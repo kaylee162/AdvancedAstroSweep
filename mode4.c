@@ -106,7 +106,7 @@ void drawImage4(int x, int y, int width, int height, const u16 *image) {
 }
 
 // Draw a fullscreen 240x160 image in Mode 4.
-void drawFullscreenImage4(const u16 *image) {
+void drawFullScreenImage4(const u16 *image) {
     DMANow(3, image, videoBuffer, (SCREENWIDTH * SCREENHEIGHT) >> 1);
 }
 
