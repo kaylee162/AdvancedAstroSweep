@@ -4,14 +4,24 @@ A fast-paced retro arcade shooter built for the **Game Boy Advance** using **Mod
 
 This version upgrades the original Mode 3 game to Mode 4 with:
 
-* Page flipping for smoother rendering
-* Palette-based graphics
-* Custom designed Start, Pause, Win, and Lose screens
-* Improved flicker handling
+* True Mode 4 palette-based rendering
+* Page flipping every frame (no flicker)
+* DMA rendering for both full-screen and non-full-screen graphics
+* Custom bitmap-based player ship
+* Alternate powered ship sprite
+* Persistent high score system
+* Fully redesigned Start and Pause screens
 
 # Game Overview
 
-You pilot a ship in deep space, blasting incoming asteroids to survive and score points. Avoid collisions, manage your lives, and use special abilities strategically to win.
+You pilot a rocket in deep space, blasting incoming asteroids to survive and score points. Avoid collisions, manage your lives, and use special abilities strategically to win.
+
+This version features two player sprites:
+
+* Standard Rocket — normal state
+* Powered Rocket — active whenever you hold a Nova Bomb
+
+Sprites are rendered using DMA with per-pixel transparency and palette patching in Mode 4.
 
 ## State Machine
 
@@ -19,29 +29,51 @@ The game is driven by a full state machine:
 
 ### **START**
 
-* Custom retro title screen
-* Press **START** to begin
+* Custom full-screen bitmap rendered using DMA
+* Static instructional overlay text
+* Press START to begin
+* Press DOWN to view the Scoreboard
 
 ### **GAME**
 
 * Main gameplay loop
-* Player movement, shooting, collisions, HUD updates
+* Rocket movement and shooting
+* Dynamic HUD updates (Lives, Points, Bombs)
+* Sprite switching based on bomb state
+* No flicker rendering via page flipping
 
 ### **PAUSE**
 
-* Press **START** to pause/resume
-* Press **SELECT** to return to START
+* Full-screen DMA-rendered bitmap
+* Static pause messaging
+* Press START to resume
+* Press SELECT to return to START
+* Press DOWN to view the Scoreboard
+
+### **SCOREBOARD**
+
+Accessible from:
+* START
+* PAUSE
+
+Displays:
+* High Score (persistent across restarts)
+* Current Score (only when opened from Pause)
+
+Returns to the state it was opened from.
 
 ### **WIN**
 
 * Triggered at 25 points
-* Custom win screen
+* Static win screen
+* High score updated if beaten
 * Press **START** to return to START
 
 ### **LOSE**
 
 * Triggered when lives reach 0
-* Custom lose screen
+* Static lose screen
+* High score updated if beaten
 * Press **START** to return to START
 
 # Controls
@@ -53,6 +85,20 @@ The game is driven by a full state machine:
 * **B** → Dash (short burst with cooldown)
 * **L** (A on keyboard) → Use Nova Bomb (if available)
 * **START** → Pause / Resume / Start game
+* DOWN (Start/Pause only) → Open Scoreboard
+
+## Dynamic Rocket System (Extra Credit Feature)
+
+The rocket visually changes based on game state:
+* When B:0 → Standard Rocket sprite
+* When B:1 → Powered Rocket sprite
+
+Implementation details:
+* Both sprites use their own 8-color palettes
+* Palettes are dynamically patched into unused Mode 4 palette slots
+* Transparent background pixels are not drawn
+* Rendering is done via row-based DMA with blending
+* No flicker due to page flipping
 
 ## HUD (Top-Left Display)
 
@@ -60,25 +106,38 @@ The game is driven by a full state machine:
 * `P:` Points
 * `B:` Nova Bomb available (0 or 1)
 
-HUD redraws dynamically and is rendered last to prevent flicker artifacts.
+HUD uses non-static text and updates in real time.
+Static screens (Start, Pause, Win, Lose, Scoreboard) use pre-rendered text and overlays.
 
-## Above-and-Beyond Mechanic: Nova Bomb Power-Up
+HUD is always drawn last to guarantee visual stability.
 
-A rare **magenta bomb asteroid** spawns roughly **1 in every ~15 asteroids**.
+# High Score System (Extra Credit Feature)
+
+* Tracks highest score achieved during runtime
+* Persists between game restarts
+* Updated automatically on Win or Lose
+* Displayed in the Scoreboard state
+
+This adds replayability and competitive depth.
+
+# Above-and-Beyond Mechanic: Nova Bomb Power-Up
+
+A rare **rose red bomb asteroid** spawns roughly **1 in every ~15 asteroids**.
 
 ### If you shoot it:
 
 * You gain a **Nova Bomb**
 * HUD shows `B:1`
+* Rocket switches to powered sprite
 * Only 1 bomb can be held at a time
 
 ### When activated:
 
 * Clears all active asteroids
 * Grants bonus points based on number cleared
+* Triggers screen shake effect
+* Powered rocket reverts to standard after use
 * Bomb is consumed immediately
-
-This mechanic adds strategic depth without altering the core gameplay loop.
 
 # Debug / Cheat Controls
 
@@ -95,50 +154,73 @@ Hold these combinations during gameplay to unlock cheats:
 
 ## Mode 4 Rendering
 
-* Uses **palette-based graphics**
-* Draws to a **back buffer**
-* Flips pages each frame for smooth animation
-* Reduces tearing and flicker
+* 8-bit indexed color mode
+* Single active 256-color palette
+* Runtime palette patching for rocket sprites
+* Back buffer rendering
+* Page flipping every frame
+* Zero flicker
 
 ## DMA Usage
-* DMA used for:
-  * `fillScreen`
-  * `drawRectangle`
-  * buffer copying
-* Minimizes CPU overhead
+
+### Full-Screen DMA
+* Start screen bitmap
+* Pause screen bitmap
+* Partial-Screen DMA
+
+### Rocket sprite rows (transparent blending)
+
+* Powered rocket sprite
+* Rectangles and fills
+* Buffer operations
+
+All sprite rendering is done via DMA row copies for performance.
+
+## Page Flipping
+
+* Entire GAME frame is drawn to back buffer
+* waitForVBlank() ensures safe timing
+* flipPage() swaps buffers
+
+Eliminates tearing and flicker completely
+
+## Transparency System
+
+Rocket sprites use:
+* Per-pixel transparency via index masking
+* Row buffering to preserve background pixels
+* Selective DMA writes
+
+White background pixels are not drawn, creating true sprite transparency in Mode 4.
 
 ## Object Pooling
 
 * Bullet pool
 * Asteroid pool
-* Objects are reused instead of reallocated
-* Prevents memory waste and improves performance
+* No dynamic allocation
+* Efficient reuse for performance stability
 
 ## Collision System
 
 * Bullet ↔ Asteroid
 * Player ↔ Asteroid
 * Bomb clears all active asteroids
-* Meaningful collisions affect score and lives
-
-## Flicker Reduction
-
-* Page flipping
-* Dirty redraw logic
-* HUD drawn last
-* Off-screen cleanup handling
+* Score and lives updated appropriately
 
 ## Core Systems
 
 * Player struct
-* Bullet struct array (object pool)
-* Asteroid struct array (object pool)
+* Rocket + Powered Rocket bitmap system
+* Bullet struct array
+* Asteroid struct array
 * Star background system
-* Score tracking
+* Persistent high score tracking
 * Bomb inventory system
-* Cooldowns (dash, shooting)
+* Dash cooldown
 * Invulnerability frames
-* Screen shake effect during bomb use
+* Screen shake effect
+* Static vs dynamic rendering separation
+* Full state machine architecture
 
 ## Build & Run
 

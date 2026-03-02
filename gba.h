@@ -124,8 +124,7 @@ typedef volatile struct {
 #define DMA_ON  (1 << 31) // Enable DMA!!!
 
 // Immediately begins a DMA transfer using parameters
-//void DMANow(int channel, volatile void* src, volatile void* dest, unsigned int ctrl);
-void DMANow(int channel, const void* src, volatile void* dest, unsigned int ctrl);
+void DMANow(int channel, const volatile void* src, volatile void* dest, unsigned int cnt);
 
 // Palette memory (256 entries, 16-bit each)
 #define PALETTE ((volatile u16*)0x5000000)

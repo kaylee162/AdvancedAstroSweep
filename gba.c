@@ -93,17 +93,9 @@ int collision(int xA, int yA, int widthA, int heightA,
         && xA + widthA - 1 >= xB;
 }
 
-// Immediately begins a DMA transfer using parameters
-//void DMANow(int channel, volatile void* src, volatile void* dest, unsigned int ctrl) {
-//  DMA[channel].ctrl = 0;      // turn off first
-//  DMA[channel].src  = src;
-//  DMA[channel].dest = dest;
-//  DMA[channel].ctrl = ctrl | DMA_ON;
-//}
-
-void DMANow(int channel, const void* src, volatile void* dest, unsigned int ctrl) {
-    DMA[channel].ctrl = 0;      // turn off first
+void DMANow(int channel, const volatile void* src, volatile void* dest, unsigned int cnt) {
+    DMA[channel].ctrl = 0;
     DMA[channel].src = src;
     DMA[channel].dest = dest;
-    DMA[channel].ctrl = ctrl | DMA_ON;
+    DMA[channel].ctrl = cnt | DMA_ON;
 }

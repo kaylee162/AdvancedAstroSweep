@@ -3,8 +3,8 @@
 #include "game.h"
 #include "start.h"
 #include "pause.h"
-//#include "rocket.h"
-//#include "powered_rocket.h"
+#include "rocket.h"
+#include "powered_rocket.h"
 
 
 // Buttons

@@ -4,8 +4,8 @@
 #include "start.h"
 #include "pause.h"
 #include <stdio.h>
-//#include "rocket.h"
-//#include "powered_rocket.h"
+#include "rocket.h"
+#include "powered_rocket.h"
 
 // Module-level game state
 static GameState state;
@@ -46,6 +46,9 @@ static void handleCollisions(void);
 static void useBomb(void);
 
 static inline void safeSetPixel4(int x, int y, u8 colorIndex);
+
+static void drawSprite4TransparentDMA(int x, int y, int w, int h,
+                                      const u16* bitmap, u8 transparentIndex, u8 palBase);
 
 // Debug cheat latch (makes combos reliable even with weird timing)
 static u16 cheatLatch = 0;
@@ -233,6 +236,12 @@ void goToStart(void) {
 void goToGame(void) {
     // If coming from START/WIN/LOSE, fully reset gameplay (but not highScore).
     DMANow(3, startPal, PALETTE, 256);
+
+    // Patch rocket colors into palette slots 240..247
+    // Patch both rocket palettes into free palette slots
+DMANow(3, rocketPal, &PALETTE[ROCKET_PAL_BASE], 8);
+DMANow(3, powered_rocketPal, &PALETTE[POWERED_ROCKET_PAL_BASE], 8);
+
     if (state == STATE_START || state == STATE_WIN || state == STATE_LOSE) {
         score = 0;
         frameCount = 0;
@@ -581,8 +590,8 @@ static void drawStars(void) {
    ========== */
 
 static void initPlayer(void) {
-    player.w = PLAYER_W;
-    player.h = PLAYER_H;
+    player.w = ROCKET_WIDTH;
+    player.h = ROCKET_HEIGHT;
 
     player.x = (SCREENWIDTH / 2) - (player.w / 2);
     player.y = (SCREENHEIGHT - 20);
@@ -634,6 +643,57 @@ static void updatePlayer(void) {
     if (BUTTON_PRESSED(BUTTON_LSHOULDER)) {
         useBomb();
     }
+
+    player.x = clamp(player.x, 0, SCREENWIDTH - player.w);
+    player.y = clamp(player.y, HUD_HEIGHT, SCREENHEIGHT - player.h);
+
+    // force even x for Mode 4 DMA blit alignment
+    player.x &= ~1;
+}
+
+static void drawSprite4TransparentDMA(
+    int x, int y,
+    int w, int h,
+    const u16* bitmap,
+    u8 transparentIndex,
+    u8 palBase
+) {
+    // Mode 4 wants even x for clean word alignment
+    if (x & 1) x--;
+
+    int wordsPerRow = w / 2;
+
+    // Temp row buffer (max width = 240 -> 120 words)
+    static u16 rowBuf[SCREENWIDTH / 2];
+
+    for (int r = 0; r < h; r++) {
+        int screenY = y + r;
+        if (screenY < HUD_HEIGHT || screenY >= SCREENHEIGHT) continue;
+
+        // Destination pointer in Mode 4 (2 pixels per u16)
+        u16* dst = videoBuffer + ((screenY * SCREENWIDTH + x) / 2);
+        const u16* src = bitmap + r * wordsPerRow;
+
+        // Build a blended row: keep dest bytes for transparent pixels
+        for (int i = 0; i < wordsPerRow; i++) {
+            u16 s = src[i];
+            u16 d = dst[i];
+
+            u8 s0 = (u8)(s & 0x00FF);
+            u8 s1 = (u8)(s >> 8);
+
+            u8 d0 = (u8)(d & 0x00FF);
+            u8 d1 = (u8)(d >> 8);
+
+            if (s0 != transparentIndex) d0 = (u8)(s0 + palBase);
+            if (s1 != transparentIndex) d1 = (u8)(s1 + palBase);
+
+            rowBuf[i] = (u16)(d0 | (d1 << 8));
+        }
+
+        // DMA the blended row back
+        DMANow(3, rowBuf, dst, wordsPerRow);
+    }
 }
 
 static void drawPlayer(void) {
@@ -641,8 +701,25 @@ static void drawPlayer(void) {
         return;
     }
 
-    drawRect4(player.x, player.y, player.w, player.h, CI_CYAN);
-    safeSetPixel4(player.x + 3, player.y + 2, CI_WHITE);
+    if (player.bombs > 0) {
+        // Powered rocket when holding a bomb
+        drawSprite4TransparentDMA(
+            player.x, player.y,
+            POWERED_ROCKET_WIDTH, POWERED_ROCKET_HEIGHT,
+            powered_rocketBitmap,
+            POWERED_TRANSPARENT_INDEX,
+            POWERED_ROCKET_PAL_BASE
+        );
+    } else {
+        // Normal rocket
+        drawSprite4TransparentDMA(
+            player.x, player.y,
+            ROCKET_WIDTH, ROCKET_HEIGHT,
+            rocketBitmap,
+            ROCKET_TRANSPARENT_INDEX,
+            ROCKET_PAL_BASE
+        );
+    }
 }
 
 /* ==========
