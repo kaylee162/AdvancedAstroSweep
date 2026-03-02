@@ -33,6 +33,19 @@
 #define PAUSE_CI_GRAY    48  // 0x39CE (nice gray)
 #define PAUSE_CI_YELLOW  52  // 0x171D (yellow-ish)
 
+#define ROCKET_PAL_BASE        240   // uses PALETTE[240..247]
+#define POWERED_ROCKET_PAL_BASE 248  // uses PALETTE[248..255]
+
+// In most sprite exports, background is index 0.
+// If your sprite background is a different index (like 3), change this.
+#define ROCKET_TRANSPARENT_INDEX 3
+#define POWERED_TRANSPARENT_INDEX 1
+
+#define ROCKET_WIDTH 24
+#define ROCKET_HEIGHT 16
+
+#define POWERED_ROCKET_WIDTH 24
+#define POWERED_ROCKET_HEIGHT 16
 // Game tuning
 #define MAX_BULLETS   16   // object pool
 #define MAX_ASTEROIDS 12   // object pool
