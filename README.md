@@ -87,7 +87,18 @@ Returns to the state it was opened from.
 * **START** → Pause / Resume / Start game
 * DOWN (Start/Pause only) → Open Scoreboard
 
-## Dynamic Rocket System (Extra Credit Feature)
+## HUD (Top-Left Display)
+
+* `L:` Lives
+* `P:` Points
+* `B:` Nova Bomb available (0 or 1)
+
+HUD uses non-static text and updates in real time.
+Static screens (Start, Pause, Win, Lose, Scoreboard) use pre-rendered text and overlays.
+
+HUD is always drawn last to guarantee visual stability.
+
+# Dynamic Rocket System (Extra Credit Feature)
 
 The rocket visually changes based on game state:
 * When B:0 → Standard Rocket sprite
@@ -100,17 +111,6 @@ Implementation details:
 * Rendering is done via row-based DMA with blending
 * No flicker due to page flipping
 
-## HUD (Top-Left Display)
-
-* `L:` Lives
-* `P:` Points
-* `B:` Nova Bomb available (0 or 1)
-
-HUD uses non-static text and updates in real time.
-Static screens (Start, Pause, Win, Lose, Scoreboard) use pre-rendered text and overlays.
-
-HUD is always drawn last to guarantee visual stability.
-
 # High Score System (Extra Credit Feature)
 
 * Tracks highest score achieved during runtime
@@ -120,7 +120,7 @@ HUD is always drawn last to guarantee visual stability.
 
 This adds replayability and competitive depth.
 
-# Above-and-Beyond Mechanic: Nova Bomb Power-Up
+# Nova Bomb Power-Up 
 
 A rare **rose red bomb asteroid** spawns roughly **1 in every ~15 asteroids**.
 
@@ -222,7 +222,7 @@ White background pixels are not drawn, creating true sprite transparency in Mode
 * Static vs dynamic rendering separation
 * Full state machine architecture
 
-## Build & Run
+# Build & Run
 
 Compile using the provided GBA toolchain and run in:
 * mGBA
