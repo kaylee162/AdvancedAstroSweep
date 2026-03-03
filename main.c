@@ -22,12 +22,14 @@ int main(void) {
         oldButtons = buttons;
         buttons = REG_BUTTONS;
 
-        // Game logic update stays the same
+        // Update game state
         updateGame();
 
-        // Draw during VBlank to reduce flicker/tearing
-        waitForVBlank();
+        // Draw to the current off-screen page (videoBuffer)
         drawGame();
+
+        // Flip ONLY during vBlank to avoid tearing
+        waitForVBlank();
         flipPage();
     }
 }
