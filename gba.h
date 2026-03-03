@@ -91,7 +91,7 @@ extern u16 buttons; // Keeps track of buttons pressed in current frame
 
 // DMA channel Struct
 typedef volatile struct {  
-    volatile void* src;  
+    const volatile void* src;  
     volatile void* dest;  
     unsigned int ctrl;
 } DMAChannel;

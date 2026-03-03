@@ -109,7 +109,6 @@ typedef struct {
     int speed;
 } Star;
 
-// Public game API (main.c calls these)
 void initGame(void);
 void updateGame(void);
 void drawGame(void);
